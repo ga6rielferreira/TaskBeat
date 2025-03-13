@@ -1,166 +1,114 @@
 package com.devspace.taskbeats.ui.view
 
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.util.Log
+import android.view.View
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.ViewModelProvider
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import androidx.room.Room
 import com.devspace.taskbeats.R
-import com.devspace.taskbeats.data.local.CategoryEntity
-import com.devspace.taskbeats.data.local.TaskBeatDatabase
-import com.devspace.taskbeats.data.local.TaskEntity
-import com.devspace.taskbeats.data.model.CategoryUiData
-import com.devspace.taskbeats.data.model.TaskUiData
+import com.devspace.taskbeats.data.model.SubTaskUiData
+import com.devspace.taskbeats.data.remote.ApiClient
+import com.devspace.taskbeats.repository.TaskRepository
+import com.devspace.taskbeats.ui.BottomSheetAddTaskFragment
 import com.devspace.taskbeats.ui.adapter.CategoryListAdapter
+import com.devspace.taskbeats.ui.adapter.SubTaskListAdapter
 import com.devspace.taskbeats.ui.adapter.TaskListAdapter
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
+import com.devspace.taskbeats.viewmodel.TaskViewModel
+import com.devspace.taskbeats.viewmodel.TaskViewModelFactory
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 
 class MainActivity : AppCompatActivity() {
 
-    private val db by lazy {
-        Room.databaseBuilder(
-            applicationContext,
-            TaskBeatDatabase::class.java, "database-task-beat"
-        ).build()
-    }
-
-    private val categoryDao by lazy {
-        db.getCategoryDao()
-    }
-
-    private val taskDao by lazy {
-        db.getTaskDao()
-    }
+    private lateinit var viewModel: TaskViewModel
+    private lateinit var taskAdapter: TaskListAdapter
+    private lateinit var subTaskAdapter: SubTaskListAdapter
+    private lateinit var categoryAdapter: CategoryListAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        insertDefaultCategory()
-
         val rvCategory = findViewById<RecyclerView>(R.id.rv_categories)
         val rvTask = findViewById<RecyclerView>(R.id.rv_tasks)
+        val rvSubTasks = findViewById<RecyclerView>(R.id.rv_subtasks)
+        val fab = findViewById<FloatingActionButton>(R.id.fab)
 
-        val taskAdapter = TaskListAdapter()
-        val categoryAdapter = CategoryListAdapter()
-
-        categoryAdapter.setOnClickListener { selected ->
-            val categoryTemp = categories.map { item ->
-                when {
-                    item.name == selected.name && !item.isSelected -> item.copy(isSelected = true)
-                    item.name == selected.name && item.isSelected -> item.copy(isSelected = false)
-                    else -> item
-                }
-            }
-
-            val taskTemp =
-                if (selected.name != "ALL") {
-                    tasks.filter { it.category == selected.name }
-                } else {
-                    tasks
-                }
-            taskAdapter.submitList(taskTemp)
-
-            categoryAdapter.submitList(categoryTemp)
-        }
+        taskAdapter = TaskListAdapter()
+        categoryAdapter = CategoryListAdapter()
+        subTaskAdapter = SubTaskListAdapter()
 
         rvCategory.adapter = categoryAdapter
-        getCategoriesFromDataBase(categoryAdapter)
+        rvCategory.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
 
         rvTask.adapter = taskAdapter
-        taskAdapter.submitList(tasks)
-    }
-    private fun insertDefaultCategory(){
-        val categoriesEntity = categories.map {
-            CategoryEntity(
-                name = it.name,
-                isSelected = it.isSelected
-            )
-        }
-        GlobalScope.launch(Dispatchers.IO) {
-            categoryDao.insertAll(categoriesEntity)
-        }
-    }
+        rvTask.layoutManager = LinearLayoutManager(this)
 
-    private fun insertDefaultTasks() {
-        val tasksEntities = tasks.map {
-            TaskEntity(
-                name = it.name,
-                category = it.category
-            )
-        }
-    }
+        rvSubTasks.adapter = subTaskAdapter
+        rvSubTasks.layoutManager = LinearLayoutManager(this)
 
+        val repository = TaskRepository.create(this, ApiClient.openAiService)
+        viewModel = ViewModelProvider(this, TaskViewModelFactory(repository))
+            .get(TaskViewModel::class.java)
 
-
-    private fun getCategoriesFromDataBase(adapter: CategoryListAdapter) {
-        GlobalScope.launch (Dispatchers.IO) {
-            val categoriesFromDb: List<CategoryEntity> = categoryDao.getAll()
-            val categoriesUiData = categoriesFromDb.map {
-                CategoryUiData(
-                    name = it.name,
-                    isSelected = it.isSelected
-                )
+        // Observar mudanças nos dados
+        viewModel.tasksUiData.observe(this) { tasks ->
+            Log.d("MainActivity", "Tarefas recebidas para exibição: ${tasks?.size ?: 0}")
+            if (tasks.isNullOrEmpty()) {
+                Log.w("MainActivity", "Lista de tarefas está vazia ou nula")
+            } else {
+                tasks.forEach { task ->
+                    Log.d("MainActivity", "Tarefa: ${task.name}, Categoria: ${task.categoryName}, ID: ${task.id}")
+                }
             }
-            adapter.submitList(categoriesUiData)
+            taskAdapter.submitList(tasks)
+            val expandedTask = tasks?.find { it.isExpanded }
+            rvSubTasks.visibility = if (expandedTask != null) View.VISIBLE else View.GONE
+            if (expandedTask != null) {
+                val subTasks = repository.getSubtasksForTask(expandedTask.id).value?.map { subTask ->
+                    SubTaskUiData(
+                        id = subTask.id,
+                        taskId = subTask.taskId,
+                        name = subTask.title,
+                        isCompleted = subTask.isCompleted
+                    )
+                } ?: emptyList()
+                Log.d("MainActivity", "Subtarefas para tarefa ${expandedTask.id}: ${subTasks.size}")
+                subTaskAdapter.submitList(subTasks)
+            }
+        }
+
+        viewModel.categoriesUiData.observe(this) { categories ->
+            Log.d("MainActivity", "Categorias recebidas: ${categories?.size ?: 0}")
+            if (categories.isNullOrEmpty()) {
+                Log.w("MainActivity", "Lista de categorias está vazia ou nula")
+            } else {
+                categories.forEach { category ->
+                    Log.d("MainActivity", "Categoria: ${category.name}, ID: ${category.id}")
+                }
+            }
+            categoryAdapter.submitList(categories)
+        }
+
+        viewModel.errorMessage.observe(this) { error ->
+            Log.e("MainActivity", "Erro: $error")
+            Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+        }
+
+        // Configurar listeners
+        taskAdapter.setOnClickListener { task ->
+            viewModel.onTaskClicked(task)
+        }
+
+        categoryAdapter.setOnClickListener { category ->
+            viewModel.onCategorySelected(category)
+        }
+
+        fab.setOnClickListener {
+            val bottomSheet = BottomSheetAddTaskFragment(viewModel)
+            bottomSheet.show(supportFragmentManager, "BottomSheetAddTaskFragment")
         }
     }
 }
-
-val categories: List<CategoryUiData> = listOf()
-
-val tasks = listOf(
-    TaskUiData(
-        "Ler 10 páginas do livro atual",
-        "STUDY",
-        "e"
-    ),
-    TaskUiData(
-        "45 min de treino na academia",
-        "HEALTH",
-        "e"
-    ),
-    TaskUiData(
-        "Correr 5km",
-        "HEALTH","e"
-    ),
-    TaskUiData(
-        "Meditar por 10 min",
-        "WELLNESS","e"
-    ),
-    TaskUiData(
-        "Silêncio total por 5 min",
-        "WELLNESS",
-        "e"
-    ),
-    TaskUiData(
-        "Descer o livo",
-        "HOME",""
-    ),
-    TaskUiData(
-        "Tirar caixas da garagem",
-        "HOME",
-        "e"
-    ),
-    TaskUiData(
-        "Lavar o carro",
-        "HOME",
-        "e"
-    ),
-    TaskUiData(
-        "Gravar aulas DevSpace",
-        "WORK",
-        "g"
-    ),
-    TaskUiData(
-        "Criar planejamento de vídeos da semana",
-        "WORK",
-        "e"
-    ),
-    TaskUiData(
-        "Soltar reels da semana",
-        "WORK",
-        "r"
-    ),
-)

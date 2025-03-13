@@ -1,0 +1,11 @@
+- ViewModel para garantir que tarefas inválidas não sejam inseridas no banco. Por exemplo, você
+  pode exigir que o name não esteja vazio e que o categoryId corresponda a uma categoria existente.
+
+  No repositório ou na ViewModel, adicione validação antes de inserir uma tarefa:
+
+  suspend fun insertTask(name: String, description: String?, categoryId: Long) {
+      require(name.isNotBlank()) { "O nome da tarefa não pode estar vazio." }
+      require(categoryDao.getById(categoryId) != null) { "A categoria selecionada não existe." }
+      val task = TaskEntity(name = name, description = description, categoryId = categoryId)
+      taskDao.insert(task)
+  }

@@ -1,9 +1,8 @@
 package com.devspace.taskbeats.data.model
 
 data class SubTaskUiData(
-    val id: Int = 0,
-    val taskId: Int,
-    val title: String
-
-
+    val id: Long = 0,
+    val taskId: Long,
+    val name: String,
+    val isCompleted: Boolean = false
 )
